@@ -1,0 +1,16 @@
+# Ignora i binari compilati
+bin/
+*.exe
+*.out
+*.app
+
+# Ignora i file oggetto intermedi
+*.o
+*.obj
+
+# Ignora file di sistema
+.DS_Store
+Thumbs.db
+
+# Ignora cartelle IDE (se usi VSCode)
+.vscode/
