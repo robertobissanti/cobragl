@@ -1,7 +1,10 @@
 # Compilatore e flag
 CC = gcc
 # -Iinclude dice al compilatore di cercare i .h nella cartella include
-CFLAGS = -Wall -Wextra -std=c99 -Iinclude
+# Aggiungiamo i flag di SDL3 tramite pkg-config
+CFLAGS = -Wall -Wextra -std=c99 -Iinclude $(shell pkg-config --cflags sdl3)
+# Librerie da linkare
+LIBS = -lm $(shell pkg-config --libs sdl3)
 
 # Cartelle
 SRC_DIR = src
@@ -23,7 +26,7 @@ all: create_dirs $(TARGET)
 # Regola per creare l'eseguibile
 # Compila il main.c collegandolo con gli oggetti della libreria
 $(TARGET): $(EX_DIR)/main.c $(LIB_OBJS)
-	$(CC) $(CFLAGS) $(EX_DIR)/main.c $(LIB_OBJS) -o $(TARGET)
+	$(CC) $(CFLAGS) $(EX_DIR)/main.c $(LIB_OBJS) -o $(TARGET) $(LIBS)
 	@echo "Compilazione completata! Esegui con: ./$(TARGET)"
 
 # Regola generica per compilare i file .c della libreria in .o
@@ -33,6 +36,10 @@ $(TARGET): $(EX_DIR)/main.c $(LIB_OBJS)
 # Crea la cartella bin se non esiste
 create_dirs:
 	@mkdir -p $(BIN_DIR)
+	@mkdir -p $(EX_DIR)
+
+run: all
+	./$(TARGET)
 
 # Pulisce tutto (utile prima di caricare su git se non hai il gitignore settato bene)
 clean:
