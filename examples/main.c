@@ -80,9 +80,27 @@ int main() {
             {{-1, -1,  1}}, {{ 1, -1,  1}}, {{ 1,  1,  1}}, {{-1,  1,  1}}
         };
 
+        // cobra_vec3 cube_vertices[8] = {
+        //     {{-1, -1, -1}}, {{ 1, -1, -1}}, {{ 1,  1, -1}}, {{-1,  1, -1}},
+        //     {{0, 0,  1}}, {{0, 0,  1}}, {{ 0,  0,  1}}, {{0,  0,  1}}
+        // };
+
+        
+        // cobra_vec3 cube_vertices[8] = {
+        //     {{1, 1, -2}}, {{ -1, 1, -2}}, {{ -1,  -1, -2}}, {{1,  -1, -2}},
+        //     {{-1, -1,  2}}, {{ 1, -1,  2}}, {{ 1,  1,  2}}, {{-1,  1,  2}}
+        // };
+
         float angle = DEGREE*5.0f;
         float fov_factor = 300.0f; // Fattore di zoom/FOV
         float camera_dist = 5.0f;  // Distanza della camera dal cubo
+
+
+       for (int i = 0; i < 8; i++) {
+        cube_vertices[i].x += 1.0f;
+        cube_vertices[i].y += 0.8f;
+
+        }
 
         while (!window.should_close) {
             cobra_window_poll_events(&window);

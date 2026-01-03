@@ -5,7 +5,8 @@
 
 bool cobra_window_create(cobra_window *win, int width, int height, const char *title)
 {
-  if (!win) return false;
+  if (!win)
+    return false;
 
   // Inizializziamo i puntatori a NULL per garantire una pulizia sicura in caso di errore
   win->sdl_window = NULL;
@@ -66,7 +67,8 @@ bool cobra_window_create(cobra_window *win, int width, int height, const char *t
 
 void cobra_window_destroy(cobra_window *win)
 {
-  if (!win) return;
+  if (!win)
+    return;
 
   if (win->color_buffer)
     free(win->color_buffer);
@@ -87,7 +89,8 @@ void cobra_window_destroy(cobra_window *win)
 
 void cobra_window_poll_events(cobra_window *win)
 {
-  if (!win) return;
+  if (!win)
+    return;
 
   SDL_Event event;
   while (SDL_PollEvent(&event))
@@ -101,7 +104,8 @@ void cobra_window_poll_events(cobra_window *win)
 
 void cobra_window_clear(cobra_window *win, uint32_t color)
 {
-  if (!win) return;
+  if (!win)
+    return;
 
   // Puliamo il color buffer
   for (int i = 0; i < win->width * win->height; i++)
@@ -113,7 +117,8 @@ void cobra_window_clear(cobra_window *win, uint32_t color)
 
 void cobra_window_present(cobra_window *win)
 {
-  if (!win) return;
+  if (!win)
+    return;
 
   // Aggiorniamo la texture con i dati del buffer
   SDL_UpdateTexture(
@@ -129,7 +134,8 @@ void cobra_window_present(cobra_window *win)
 
 void cobra_window_put_pixel(cobra_window *win, int x, int y, uint32_t color)
 {
-  if (!win) return;
+  if (!win)
+    return;
 
   if (x >= 0 && x < win->width && y >= 0 && y < win->height)
   {
@@ -139,11 +145,14 @@ void cobra_window_put_pixel(cobra_window *win, int x, int y, uint32_t color)
 
 void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, uint32_t color)
 {
-  // Algoritmo di Bresenham serve a tracciare una linea retta 
+  if (!win)
+    return;
+
+  // Algoritmo di Bresenham serve a tracciare una linea retta
   // tra due punti su una griglia di pixel (rasterizzazione).
   // Calcoliamo le differenze assolute (delta) tra le coordinate
   int dx = abs(x1 - x0);
-  int dy = abs(y1 - y0);
+  int dy = -abs(y1 - y0);
 
   // Determiniamo la direzione del passo (+1 o -1) per ogni asse
   int sx = (x0 < x1) ? 1 : -1;
@@ -151,10 +160,9 @@ void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, u
 
   // Variabile di decisione scalata per 2 (2 * (dx - dy))
   // Scaliamo tutto per 2 all'inizio per evitare la moltiplicazione dentro il loop
-  int dy2 = 2 * dy;
+  int dy2 = 2 * dy; // 2 * sign(y1-y0)*(y1-y0) 
   int dx2 = 2 * dx;
-  int decision = dx2 - dy2; //2 * (dx - dy);
-
+  int decision = dx2 + dy2; // 2 * (dx - dy);
 
   while (true)
   {
@@ -162,22 +170,71 @@ void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, u
     cobra_window_put_pixel(win, x0, y0, color);
 
     // Se abbiamo raggiunto il punto finale, usciamo dal loop
-    if (x0 == x1 && y0 == y1) break;
+    if (x0 == x1 && y0 == y1)
+      break;
 
     // Salviamo il valore corrente della decisione (snapshot)
     // Non serve più moltiplicare per 2 perché 'decision' è già scalato
-    int decision_curr = decision;
+    //int decision_curr = decision;
 
-    // Se la decisione accumulata suggerisce un movimento orizzontale
-    if (decision_curr > -dy) {
-      decision -= dy2;
-      x0 += sx;
-    }
+    int condX = (decision >= dy);
+    int condY = (decision <= dx);
 
-    // Se la decisione accumulata suggerisce un movimento verticale
-    if (decision_curr < dx) {
-      decision += dx2;
-      y0 += sy;
-    }
+      
+    x0 += condX*sx;
+    y0 += condY*sy;
+    decision += condX*dy2 + condY*dx2;
+
+  //   // Se la decisione accumulata suggerisce un movimento orizzontale
+  //   // la retta passa a destra del punto medio destro del pixel (xi+1/2, yi)
+  //   if (decision_curr > -dy) // attenzione decision_curr > - abs(y1-y0) y0 originale
+  //   {
+  //     decision -= dy2;
+  //     x0 += sx;
+  //   }
+
+  //   // Se la decisione accumulata suggerisce un movimento verticale
+  //   // la retta passa a sinistra del punto medio alto del pixel (xi, yi+1/2)
+  //   if (decision_curr < dx)
+  //   {
+  //     decision += dx2;
+  //     y0 += sy;
+  //   }
   }
 }
+
+
+
+// void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, uint32_t color)
+// {
+//   if (!win)
+//     return;
+
+
+//   int dx = abs(x1 - x0);
+//   int dy = -abs(y1 - y0);
+
+//   int sx = (x0 < x1) ? 1 : -1;
+//   int sy = (y0 < y1) ? 1 : -1;
+
+//   int dy2 = 2 * dy;
+//   int dx2 = 2 * dx;
+//   int decision = dx + dy; 
+
+//   while (true)
+//   {
+//     cobra_window_put_pixel(win, x0, y0, color);
+
+//     if (x0 == x1 && y0 == y1)
+//       break;
+
+
+//     int condX = (decision >= dy);
+//     int condY = (decision <= dx);
+      
+//     x0 += condX*sx;
+//     y0 += condY*sy;
+//     decision += condX*dy2 + condY*dx2;
+    
+//   }
+// }
