@@ -150,19 +150,61 @@ void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, u
 
   // Algoritmo di Bresenham serve a tracciare una linea retta
   // tra due punti su una griglia di pixel (rasterizzazione).
+
+  // Retta in forma implicita (segmento orientato)
+  // f(x,y) = (x-x0)*(y1-y0) - (y-y0)*(x1-x0)
+  //
+  // Con le convenzioni:
+  //   dx = |x1-x0| > 0
+  //   dy = -|y1-y0| < 0
   // Calcoliamo le differenze assolute (delta) tra le coordinate
   int dx = abs(x1 - x0);
   int dy = -abs(y1 - y0);
 
+  //   sx = sign(x1-x0)
+  //   sy = sign(y1-y0)
   // Determiniamo la direzione del passo (+1 o -1) per ogni asse
   int sx = (x0 < x1) ? 1 : -1;
   int sy = (y0 < y1) ? 1 : -1;
 
-  // Variabile di decisione scalata per 2 (2 * (dx - dy))
-  // Scaliamo tutto per 2 all'inizio per evitare la moltiplicazione dentro il loop
-  int dy2 = 2 * dy; // 2 * sign(y1-y0)*(y1-y0) 
+  // valgono le identità:
+  //   x1-x0 = sx*dx
+  //   y1-y0 = -sy*dy
+  //
+  // quindi:
+  //   f(x,y) = - [ (x-x0)*sy*dy + (y-y0)*sx*dx ]
+  //
+  // Moltiplicare f per -1 NON cambia lo zero-set (f=0), ma inverte il segno.
+  // Questo è utile perché possiamo scegliere una funzione equivalente e poi
+  // usare disuguaglianze coerenti (>= / <=) nei test.
+  // Introduciamo quindi:
+  //
+  //   E(x,y) = -2*f(x,y)
+  //          = 2*(x-x0)*sy*dy + 2*(y-y0)*sx*dx
+  //
+  // E(x,y) ha lo stesso zero-set di f(x,y) (la stessa retta), e codifica il lato
+  // con segno opposto. È comoda perché gli incrementi su griglia di 1 in x/y
+  // producono variazioni costanti (±2dy, ±2dx) dopo la scalatura.
+  //
+  // In particolare:
+  //   E(x0,y0) = 0
+  //
+  // La variabile di stato 'decision' è una trasformazione affine di E:
+  //   decision = E(x,y) + 2*dx + 2*dy
+  //
+  // Nel loop, 'decision' è mantenuta incrementalmente: non si ricalcola da zero.
+  // È una forma affine del valore E_i = E(x_i,y_i) al pixel corrente.
+  // Questa scelta non è arbitraria:
+  // - preserva i segni rilevanti per i test geometrici
+  // - consente aggiornamenti incrementali costanti (+2*dx, +2*dy)
+  // - rende le soglie di decisione indipendenti dai quadranti
+  //
+  // Valore iniziale:
+  //   decision_0 = E(x0,y0) + 2*dx + 2*dy = 2*dx + 2*dy
+
+  int dy2 = 2 * dy;
   int dx2 = 2 * dx;
-  int decision = dx2 + dy2; // 2 * (dx - dy);
+  int decision = dx2 + dy2; // decision_0
 
   while (true)
   {
@@ -173,68 +215,18 @@ void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, u
     if (x0 == x1 && y0 == y1)
       break;
 
-    // Salviamo il valore corrente della decisione (snapshot)
-    // Non serve più moltiplicare per 2 perché 'decision' è già scalato
-    //int decision_curr = decision;
 
-    int condX = (decision >= dy);
-    int condY = (decision <= dx);
+    // mi sposto in X se decision>=dy che corrisponde a porre 2*f(W) <= 0
+    // ovvero E(W) >=0 
+    // con W = (x_i + 3/2*sx, y_i + 1*sy)
+    int condX = (decision >= dy); 
+    // mi sposto in Y se decision<=dy che corrisponde a porre 2*f(Q) >= 0
+    // ovvero E(Q) <=0 
+    // con Q = (x_i + 1*sx, y_i + 1/2*sy)
+    int condY = (decision <= dx); 
 
-      
-    x0 += condX*sx;
-    y0 += condY*sy;
-    decision += condX*dy2 + condY*dx2;
-
-  //   // Se la decisione accumulata suggerisce un movimento orizzontale
-  //   // la retta passa a destra del punto medio destro del pixel (xi+1/2, yi)
-  //   if (decision_curr > -dy) // attenzione decision_curr > - abs(y1-y0) y0 originale
-  //   {
-  //     decision -= dy2;
-  //     x0 += sx;
-  //   }
-
-  //   // Se la decisione accumulata suggerisce un movimento verticale
-  //   // la retta passa a sinistra del punto medio alto del pixel (xi, yi+1/2)
-  //   if (decision_curr < dx)
-  //   {
-  //     decision += dx2;
-  //     y0 += sy;
-  //   }
+    x0 += condX * sx; // aggiorniamo il valore di x0 in base a condX
+    y0 += condY * sy; // aggiorniamo il valore di y0 in base a condY
+    decision += condX * dy2 + condY * dx2; // aggiorniamo decision
   }
 }
-
-
-
-// void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, uint32_t color)
-// {
-//   if (!win)
-//     return;
-
-
-//   int dx = abs(x1 - x0);
-//   int dy = -abs(y1 - y0);
-
-//   int sx = (x0 < x1) ? 1 : -1;
-//   int sy = (y0 < y1) ? 1 : -1;
-
-//   int dy2 = 2 * dy;
-//   int dx2 = 2 * dx;
-//   int decision = dx + dy; 
-
-//   while (true)
-//   {
-//     cobra_window_put_pixel(win, x0, y0, color);
-
-//     if (x0 == x1 && y0 == y1)
-//       break;
-
-
-//     int condX = (decision >= dy);
-//     int condY = (decision <= dx);
-      
-//     x0 += condX*sx;
-//     y0 += condY*sy;
-//     decision += condX*dy2 + condY*dx2;
-    
-//   }
-// }
