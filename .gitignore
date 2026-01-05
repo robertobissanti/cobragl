@@ -4,6 +4,7 @@ draft/
 *.exe
 *.out
 *.app
+.*.un~
 
 # Ignora i file oggetto intermedi
 *.o
