@@ -22,7 +22,9 @@ void cobra_window_destroy(cobra_window *win);
 void cobra_window_poll_events(cobra_window *win);
 void cobra_window_clear(cobra_window *win, uint32_t color);
 void cobra_window_present(cobra_window *win);
-void cobra_window_put_pixel(cobra_window *win, int x, int y, uint32_t color);
+void cobra_window_draw_point(cobra_window *win, int x, int y, uint32_t color);
+void cobra_window_draw_point_aa(cobra_window *win, int x, int y, uint32_t color, float alpha);
 void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, uint32_t color);
+void cobra_window_draw_line_aa(cobra_window *win, float x0, float y0, float x1, float y1, float width, uint32_t color, bool use_ss);
 
 #endif

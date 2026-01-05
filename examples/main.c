@@ -132,16 +132,16 @@ int main() {
             // Colleghiamo i vertici secondo la struttura del cubo
             for (int i = 0; i < 4; i++) {
                 // Faccia frontale (0-1, 1-2, 2-3, 3-0)
-                cobra_window_draw_line(&window, (int)projected_points[i].x, (int)projected_points[i].y, 
-                                                (int)projected_points[(i+1)%4].x, (int)projected_points[(i+1)%4].y, 0xFFFFFFFF);
+                cobra_window_draw_line_aa(&window, projected_points[i].x, projected_points[i].y, 
+                                                projected_points[(i+1)%4].x, projected_points[(i+1)%4].y, 0.1f, 0xFF00FFFF, false); // Magenta Spesso (SDF)
                 
                 // Faccia posteriore (4-5, 5-6, 6-7, 7-4)
-                cobra_window_draw_line(&window, (int)projected_points[i+4].x, (int)projected_points[i+4].y, 
-                                                (int)projected_points[((i+1)%4)+4].x, (int)projected_points[((i+1)%4)+4].y, 0xFFFFFFFF);
+                cobra_window_draw_line_aa(&window, projected_points[i+4].x, projected_points[i+4].y, 
+                                                projected_points[((i+1)%4)+4].x, projected_points[((i+1)%4)+4].y, 3.0f, 0xFFFFFF00, true); // Giallo Medio (Supersampling)
                 
                 // Collegamenti tra fronte e retro (0-4, 1-5, 2-6, 3-7)
-                cobra_window_draw_line(&window, (int)projected_points[i].x, (int)projected_points[i].y, 
-                                                (int)projected_points[i+4].x, (int)projected_points[i+4].y, 0xFFFFFFFF);
+                cobra_window_draw_line(&window, projected_points[i].x, projected_points[i].y, 
+                                                projected_points[i+4].x, projected_points[i+4].y, 0xFFFFFFFF); // Bianco Sottile
             }
 
             // 4. Swap buffers
