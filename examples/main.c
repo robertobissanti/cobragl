@@ -91,28 +91,48 @@ int main() {
         //     {{-1, -1,  2}}, {{ 1, -1,  2}}, {{ 1,  1,  2}}, {{-1,  1,  2}}
         // };
 
-        float angle = DEGREE*5.0f;
-        float fov_factor = 300.0f; // Fattore di zoom/FOV
-        float camera_dist = 5.0f;  // Distanza della camera dal cubo
+        float angle = DEGREE*1.0f;
+        float fov_factor = 800.0f; // Fattore di zoom/FOV
+        float camera_dist = 8.0f;  // Distanza della camera dal cubo
 
+        bool animate = true;
+        float rotation_speed = 0.5f; // Velocità desiderata: 1.5 radianti al secondo
+        uint64_t last_time = SDL_GetTicks(); // Tempo al frame precedente
 
        for (int i = 0; i < 8; i++) {
         cube_vertices[i].x += 1.0f;
-        cube_vertices[i].y += 0.8f;
+        cube_vertices[i].y += 1.0f;
 
         }
 
         while (!window.should_close) {
-            cobra_window_poll_events(&window);
+            // Calcolo del Delta Time (dt) in secondi
+            uint64_t current_time = SDL_GetTicks();
+            float dt = (float)(current_time - last_time) / 1000.0f;
+            last_time = current_time;
+
+            SDL_Event event;
+            while (SDL_PollEvent(&event)) {
+                if (event.type == SDL_EVENT_QUIT) {
+                    window.should_close = true;
+                } else if (event.type == SDL_EVENT_KEY_DOWN) {
+                    if (event.key.key == SDLK_SPACE) {
+                        animate = !animate;
+                    }
+                }
+            }
             
             // 1. Pulisci buffer (Sfondo nero: 0xFF000000)
             cobra_window_clear(&window, 0xFF000000);
 
             // Aggiorna rotazione
-            angle += 0.005f;
+            if (animate) {
+                // Ora l'angolo aumenta in base al tempo trascorso, non ai frame!
+                angle += rotation_speed * dt;
+            }
 
-            // 2. Pipeline 3D: Calcolo dei vertici proiettati
-            cobra_vec3 projected_points[8];
+            // 2. Pipeline 3D: Trasformazione (World -> View)
+            cobra_vec3 transformed_points[8];
             for (int i = 0; i < 8; i++) {
                 cobra_vec3 point = cube_vertices[i];
 
@@ -124,24 +144,24 @@ int main() {
                 // B. Traslazione (Spostiamo il cubo davanti alla camera lungo Z)
                 point.z += camera_dist;
 
-                // C. Proiezione (3D -> 2D)
-                projected_points[i] = cobra_vec3_project(point, fov_factor, 800, 600);
+                // Salviamo il punto 3D trasformato (NON ancora proiettato)
+                transformed_points[i] = point;
             }
 
-            // 3. Disegno delle linee (Wireframe)
+            // 3. Disegno delle linee con Clipping 3D
             // Colleghiamo i vertici secondo la struttura del cubo
             for (int i = 0; i < 4; i++) {
                 // Faccia frontale (0-1, 1-2, 2-3, 3-0)
-                cobra_window_draw_line_aa(&window, projected_points[i].x, projected_points[i].y, 
-                                                projected_points[(i+1)%4].x, projected_points[(i+1)%4].y, 0.1f, 0xFF00FFFF, false); // Magenta Spesso (SDF)
+                cobra_window_draw_line_3d(&window, transformed_points[i], transformed_points[(i+1)%4], 
+                                          fov_factor, 0.1f, 0xFFFF00FF, true, false);
                 
                 // Faccia posteriore (4-5, 5-6, 6-7, 7-4)
-                cobra_window_draw_line_aa(&window, projected_points[i+4].x, projected_points[i+4].y, 
-                                                projected_points[((i+1)%4)+4].x, projected_points[((i+1)%4)+4].y, 3.0f, 0xFFFFFF00, true); // Giallo Medio (Supersampling)
+                cobra_window_draw_line_3d(&window, transformed_points[i+4], transformed_points[((i+1)%4)+4], 
+                                          fov_factor, 0.1f, 0xFFFFFF00, true, true);
                 
                 // Collegamenti tra fronte e retro (0-4, 1-5, 2-6, 3-7)
-                cobra_window_draw_line(&window, projected_points[i].x, projected_points[i].y, 
-                                                projected_points[i+4].x, projected_points[i+4].y, 0xFFFFFFFF); // Bianco Sottile
+                cobra_window_draw_line_3d(&window, transformed_points[i], transformed_points[i+4], 
+                                          fov_factor, 1.0f, 0xFFFFFFFF, false, false);
             }
 
             // 4. Swap buffers

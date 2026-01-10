@@ -1,4 +1,5 @@
 #include "cobragl/core.h"
+#include "cobragl/math.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +31,13 @@ bool cobra_window_create(cobra_window *win, int width, int height, const char *t
     return false;
   }
 
+  // Abilitiamo il VSync per sincronizzare il rendering con il refresh rate del monitor (es. 60Hz).
+  // Questo elimina il "tearing" (linee spezzate) e gli artefatti visivi durante il movimento.
+  SDL_SetRenderVSync(win->sdl_renderer, 1);
+
+  // Impostiamo il colore di pulizia del renderer a Nero Opaco per sicurezza
+  SDL_SetRenderDrawColor(win->sdl_renderer, 0, 0, 0, 255);
+
   // Creiamo una texture in streaming per l'accesso diretto ai pixel
   win->color_buffer_texture = SDL_CreateTexture(
       win->sdl_renderer,
@@ -45,8 +53,10 @@ bool cobra_window_create(cobra_window *win, int width, int height, const char *t
     return false;
   }
 
-  // Abilitiamo il blending: SDL userà il canale Alpha per la trasparenza
-  SDL_SetTextureBlendMode(win->color_buffer_texture, SDL_BLENDMODE_BLEND);
+  // Disabilitiamo il blending della texture SDL.
+  // Poiché facciamo il blending manuale nel buffer software e scriviamo pixel opachi (Alpha 255),
+  // vogliamo che la texture sovrascriva completamente il contenuto della finestra (Copy, non Blend).
+  SDL_SetTextureBlendMode(win->color_buffer_texture, SDL_BLENDMODE_NONE);
 
   // Allocazione buffer
   win->color_buffer = (uint32_t *)malloc(sizeof(uint32_t) * width * height);
@@ -103,6 +113,42 @@ void cobra_window_poll_events(cobra_window *win)
   }
 }
 
+void cobra_window_draw_line_3d(cobra_window *win, cobra_vec3 p1, cobra_vec3 p2, 
+                               float fov, float thickness, uint32_t color, bool aa, bool use_ss) {
+    if (!win) return;
+    
+    // Piano vicino (Near Plane). 
+    // Aumentato a 0.5f per evitare coordinate proiettate troppo grandi che causano artefatti.
+    float near_plane = 0.5f; 
+
+    // 1. Trivial Reject: Entrambi i punti sono dietro la camera
+    if (p1.z < near_plane && p2.z < near_plane) return;
+
+    // 2. Clipping 3D: Se un punto è dietro, accorciamo la linea fino al near plane
+    if (p1.z < near_plane) {
+        float t = (near_plane - p1.z) / (p2.z - p1.z);
+        p1.x = p1.x + (p2.x - p1.x) * t;
+        p1.y = p1.y + (p2.y - p1.y) * t;
+        p1.z = near_plane;
+    } else if (p2.z < near_plane) {
+        float t = (near_plane - p2.z) / (p1.z - p2.z);
+        p2.x = p2.x + (p1.x - p2.x) * t;
+        p2.y = p2.y + (p1.y - p2.y) * t;
+        p2.z = near_plane;
+    }
+
+    // 3. Proiezione (ora sicura perché z >= near_plane)
+    cobra_vec3 proj1 = cobra_vec3_project(p1, fov, (float)win->width, (float)win->height);
+    cobra_vec3 proj2 = cobra_vec3_project(p2, fov, (float)win->width, (float)win->height);
+
+    // 4. Disegno 2D (con clipping schermo automatico)
+    if (aa) {
+        cobra_window_draw_line_aa(win, proj1.x, proj1.y, proj2.x, proj2.y, thickness, color, use_ss);
+    } else {
+        cobra_window_draw_line(win, (int)proj1.x, (int)proj1.y, (int)proj2.x, (int)proj2.y, color);
+    }
+}
+
 void cobra_window_clear(cobra_window *win, uint32_t color)
 {
   if (!win)
@@ -127,6 +173,10 @@ void cobra_window_present(cobra_window *win)
       NULL,
       win->color_buffer,
       (int)(win->width * sizeof(uint32_t)));
+
+  // Puliamo il renderer SDL (Backbuffer) prima di disegnare la texture
+  // Questo rimuove qualsiasi residuo del frame precedente dal buffer della GPU
+  SDL_RenderClear(win->sdl_renderer);
 
   // Copiamo la texture sul renderer
   SDL_RenderTexture(win->sdl_renderer, win->color_buffer_texture, NULL, NULL);
@@ -171,19 +221,105 @@ void cobra_window_draw_point_aa(cobra_window *win, int x, int y, uint32_t color,
   int bg_b = bg & 0xFF;
 
   // Blending lineare float
+  float inv_alpha = 1.0f - alpha;
   // Aggiungiamo +0.5f per arrotondamento corretto (round-to-nearest) invece di troncamento
-  int out_r = (int)(r * alpha + bg_r * (1.0f - alpha) + 0.5f);
-  int out_g = (int)(g * alpha + bg_g * (1.0f - alpha) + 0.5f);
-  int out_b = (int)(b * alpha + bg_b * (1.0f - alpha) + 0.5f);
+  int out_r = (int)(r * alpha + bg_r * inv_alpha + 0.5f);
+  int out_g = (int)(g * alpha + bg_g * inv_alpha + 0.5f);
+  int out_b = (int)(b * alpha + bg_b * inv_alpha + 0.5f);
 
   // Ricomponiamo (Alpha 255 fisso per il buffer finale)
   win->color_buffer[y * win->width + x] = (0xFF << 24) | (out_r << 16) | (out_g << 8) | out_b;
+}
+
+// --- COHEN-SUTHERLAND CLIPPING ALGORITHM ---
+// Definizioni dei codici di regione (Bitmask)
+#define CS_INSIDE 0  // 0000
+#define CS_LEFT   1  // 0001
+#define CS_RIGHT  2  // 0010
+#define CS_BOTTOM 4  // 0100
+#define CS_TOP    8  // 1000
+
+// Calcola il codice di regione - versione branchless ottimizzata
+static inline int compute_outcode(int x, int y, int min_x, int min_y, int max_x, int max_y) {
+    return ((x < min_x) << 0) |      // CS_LEFT
+           ((x >= max_x) << 1) |      // CS_RIGHT
+           ((y < min_y) << 2) |       // CS_BOTTOM
+           ((y >= max_y) << 3);       // CS_TOP
+}
+
+// Helper per il clipping su un bordo specifico (Integer)
+static inline void clip_to_edge(int *x, int *y, int x0, int y0, int x1, int y1, 
+                                 int edge_bit, int edge_coord) {
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    
+    // edge_bit: LEFT=1, RIGHT=2, BOTTOM=4, TOP=8
+    // Verticale se bit 0 o 1 è settato (1 o 2)
+    int is_vertical = edge_bit & 3; 
+    
+    if (is_vertical) {
+        *x = edge_coord;
+        *y = dy ? (y0 + (int)((double)dy * (edge_coord - x0) / dx)) : y0;
+    } else {
+        *y = edge_coord;
+        *x = dx ? (x0 + (int)((double)dx * (edge_coord - y0) / dy)) : x0;
+    }
+}
+
+// Algoritmo di Clipping - versione compatta (int)
+static bool cohen_sutherland_clip(int *x0, int *y0, int *x1, int *y1, 
+                                  int min_x, int min_y, int max_x, int max_y) {
+    int outcode0 = compute_outcode(*x0, *y0, min_x, min_y, max_x, max_y);
+    int outcode1 = compute_outcode(*x1, *y1, min_x, min_y, max_x, max_y);
+
+    // Massimo 4 iterazioni (una per ogni bordo)
+    for (int iter = 0; iter < 4; iter++) {
+        // Trivial Accept: entrambi dentro
+        if (!(outcode0 | outcode1)) {
+            return true;
+        } 
+        // Trivial Reject: entrambi fuori dalla stessa parte
+        if (outcode0 & outcode1) {
+            return false;
+        }
+
+        // Seleziona il punto fuori e il bit di bordo da clippare
+        int code_out = outcode0 ? outcode0 : outcode1;
+        int bit = code_out & -code_out;  // Isola il bit meno significativo (LSB)
+        
+        // Tabella di coordinate dei bordi
+        int edges[4] = {min_x, max_x - 1, min_y, max_y - 1};
+        int edge_idx = __builtin_ctz(bit);  // Count Trailing Zeros (log2 del bit)
+        int edge_coord = edges[edge_idx];
+        
+        // Calcola intersezione
+        int x, y;
+        clip_to_edge(&x, &y, *x0, *y0, *x1, *y1, bit, edge_coord);
+        
+        // Aggiorna punto e codice
+        int *px = (code_out == outcode0) ? x0 : x1;
+        int *py = (code_out == outcode0) ? y0 : y1;
+        *px = x; *py = y;
+        
+        // Ricalcola codice solo per il punto modificato
+        if (code_out == outcode0)
+             outcode0 = compute_outcode(x, y, min_x, min_y, max_x, max_y);
+        else
+             outcode1 = compute_outcode(x, y, min_x, min_y, max_x, max_y);
+    }
+    return true;
 }
 
 void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, uint32_t color)
 {
   if (!win)
     return;
+
+  // Applichiamo il clipping geometrico.
+  // Usiamo 0,0,w,h per clipping esatto, la funzione ora supporta "Guard Bands" (es. -10, -10, w+10, h+10)
+  if (!cohen_sutherland_clip(&x0, &y0, &x1, &y1, 0, 0, win->width, win->height)) {
+      return; // Linea completamente fuori
+  }
 
   // Algoritmo di Bresenham super-compatto
   // Serve a tracciare una linea rettatra due punti su 
@@ -258,10 +394,86 @@ void cobra_window_draw_line(cobra_window *win, int x0, int y0, int x1, int y1, u
   }
 }
 
+// Versione float di compute_outcode branchless
+static inline int compute_outcode_f(float x, float y, float min_x, float min_y, float max_x, float max_y) {
+    return ((x < min_x) << 0) |
+           ((x >= max_x) << 1) |
+           ((y < min_y) << 2) |
+           ((y >= max_y) << 3);
+}
+
+// Helper per il clipping su un bordo specifico (Float)
+static inline void clip_to_edge_f(float *x, float *y, float x0, float y0, 
+                                   float x1, float y1, int edge_bit, 
+                                   float edge_coord) {
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    int is_vertical = edge_bit & 3;
+    
+    if (is_vertical) {
+        *x = edge_coord;
+        *y = (fabsf(dx) > 1e-6f) ? (y0 + dy * (edge_coord - x0) / dx) : y0;
+    } else {
+        *y = edge_coord;
+        *x = (fabsf(dy) > 1e-6f) ? (x0 + dx * (edge_coord - y0) / dy) : x0;
+    }
+}
+
+// Versione float di Cohen-Sutherland per l'Anti-Aliasing (Compact)
+static bool cohen_sutherland_clip_f(float *x0, float *y0, float *x1, float *y1, 
+                                    float min_x, float min_y, float max_x, float max_y) {
+    int outcode0 = compute_outcode_f(*x0, *y0, min_x, min_y, max_x, max_y);
+    int outcode1 = compute_outcode_f(*x1, *y1, min_x, min_y, max_x, max_y);
+
+    for (int iter = 0; iter < 4; iter++) {
+        if (!(outcode0 | outcode1)) {
+            return true;
+        }
+        if (outcode0 & outcode1) {
+            return false;
+        }
+
+        int code_out = outcode0 ? outcode0 : outcode1;
+        int bit = code_out & -code_out;
+        
+        float edges[4] = {min_x, max_x, min_y, max_y};
+        int edge_idx = __builtin_ctz(bit);
+        float edge_coord = edges[edge_idx];
+        
+        float x, y;
+        clip_to_edge_f(&x, &y, *x0, *y0, *x1, *y1, bit, edge_coord);
+        
+        float *px = (code_out == outcode0) ? x0 : x1;
+        float *py = (code_out == outcode0) ? y0 : y1;
+        *px = x; *py = y;
+        
+        if (code_out == outcode0)
+            outcode0 = compute_outcode_f(x, y, min_x, min_y, max_x, max_y);
+        else
+            outcode1 = compute_outcode_f(x, y, min_x, min_y, max_x, max_y);
+    }
+    return true;
+}
+
 void cobra_window_draw_line_aa(cobra_window *win, float x0, float y0, float x1, float y1, float width, uint32_t color, bool use_ss)
 {
   if (!win) return;
 
+  // --- GUARD BAND CLIPPING ---
+  // Usiamo una "Guard Band" (cornice di sicurezza) attorno allo schermo.
+  // Questo serve a:
+  // 1. Tagliare linee enormi (ottimizzazione)
+  // 2. Mantenere i "Caps" (punte arrotondate) fuori dalla vista, così non si vedono artefatti di taglio.
+  // Il margine deve essere almeno pari al raggio della linea + un extra.
+  float gb_margin = width * 0.5f + 2.0f;
+  
+  if (!cohen_sutherland_clip_f(&x0, &y0, &x1, &y1, 
+                               -gb_margin, -gb_margin, 
+                               (float)win->width + gb_margin, (float)win->height + gb_margin)) {
+      return; // Linea completamente fuori dalla Guard Band
+  }
+
+  // Ricalcoliamo i delta dopo il clipping (la geometria è cambiata)
   float fdx = x1 - x0;
   float fdy = y1 - y0;
   float len_sq = fdx*fdx + fdy*fdy;
@@ -370,37 +582,46 @@ void cobra_window_draw_line_aa(cobra_window *win, float x0, float y0, float x1, 
 
     for (int k = -span_r; k <= span_r; k++) {
       
+      // Bounds Check anticipato: se siamo fuori schermo, saltiamo i calcoli pesanti
+      // ma aggiorniamo comunque gli iteratori per non rompere il loop incrementale.
+      if (px < 0 || px >= win->width || py < 0 || py >= win->height) {
+          t_iter += dt_span;
+          d_iter += dd_span;
+          px += span_sx;
+          py += span_sy;
+          continue;
+      }
+
       if (use_ss) {
-        // --- SUPERSAMPLING 4x4 (16 campioni) ---
+        // --- SUPERSAMPLING RGSS (Rotated Grid Supersampling) ---
+        // 4 campioni ottimizzati invece di 16, qualità comparabile ma molto più veloce.
+        static const float rgss[4][2] = {
+            {-0.375f, -0.125f}, {0.125f, -0.375f},
+            {-0.125f,  0.375f}, {0.375f,  0.125f}
+        };
+
         int hits = 0;
-        // Offset per griglia 4x4 centrata: -0.375, -0.125, 0.125, 0.375
-        // Passo 0.25
-        for (int sy_i = 0; sy_i < 4; sy_i++) {
-            float oy = -0.375f + sy_i * 0.25f;
-            for (int sx_i = 0; sx_i < 4; sx_i++) {
-                float ox = -0.375f + sx_i * 0.25f;
+        for (int i = 0; i < 4; i++) {
+            float ox = rgss[i][0];
+            float oy = rgss[i][1];
                 
-                // Calcoliamo t e d per il subpixel
-                // t varia con il gradiente dt_dx/dt_dy
-                float t_sub = t_iter + ox * dt_dx + oy * dt_dy;
-                float d_sub = d_iter + ox * dd_dx + oy * dd_dy;
+            // Calcoliamo t e d per il subpixel
+            float t_sub = t_iter + ox * dt_dx + oy * dt_dy;
+            float d_sub = d_iter + ox * dd_dx + oy * dd_dy;
                 
-                // Distanza al quadrato dal segmento
-                float tc = t_sub;
-                if (tc < 0.0f) tc = 0.0f; else if (tc > 1.0f) tc = 1.0f;
-                float dtc = t_sub - tc;
+            float tc = t_sub;
+            if (tc < 0.0f) tc = 0.0f; else if (tc > 1.0f) tc = 1.0f;
+            float dtc = t_sub - tc;
+            
+            float dist_sq_sub = d_sub*d_sub + dtc*dtc*len_sq;
                 
-                float dist_sq_sub = d_sub*d_sub + dtc*dtc*len_sq;
-                
-                // Check contro il raggio reale (senza +0.5 di AA)
-                if (dist_sq_sub <= radius*radius) {
-                    hits++;
-                }
+            if (dist_sq_sub <= radius*radius) {
+                hits++;
             }
         }
         
         if (hits > 0) {
-            cobra_window_draw_point_aa(win, px, py, color, hits / 16.0f);
+            cobra_window_draw_point_aa(win, px, py, color, hits * 0.25f); // hits / 4.0f
         }
 
       } else {
